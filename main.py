@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Афина 4.0 - Живая личность с голосовым распознаванием через SaluteSpeech
+Афина 5.0 - Живая личность с генерацией изображений (Nano Banana/Gemini)
 """
 
 import os
@@ -11,27 +11,34 @@ import threading
 import requests
 import random
 import hashlib
-import uuid
-import base64
 import fcntl
 import sys
 import signal
 import traceback
+import base64
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 import telebot
 from langchain_gigachat.chat_models import GigaChat
 from duckduckgo_search import DDGS
+import google.generativeai as genai
 
 # ====== НАСТРОЙКИ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ======
 GIGACHAT_CREDENTIALS = os.environ.get("GIGACHAT_CREDENTIALS", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-SBER_SPEECH_KEY = os.environ.get("SBER_SPEECH_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")  # Ключ для Gemini/Nano Banana
 # ================================================
 
 if not GIGACHAT_CREDENTIALS or not TELEGRAM_TOKEN:
     print("❌ Ошибка: Не заданы переменные окружения!")
     exit(1)
+
+# Настраиваем Gemini
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    print("✅ Gemini API настроен")
+else:
+    print("⚠️ Gemini API не настроен (генерация изображений отключена)")
 
 # ====== ЗАЩИТА ОТ ПОВТОРНОГО ЗАПУСКА ======
 def single_instance():
@@ -73,7 +80,7 @@ model = GigaChat(
 # Создаём Telegram бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Сбрасываем вебхук (важно для polling)
+# Сбрасываем вебхук
 try:
     bot.remove_webhook()
     time.sleep(1)
@@ -81,180 +88,78 @@ try:
 except Exception as e:
     print(f"⚠️ Ошибка при сбросе вебхука: {e}")
 
-# ====== РАСПОЗНАВАНИЕ ГОЛОСА ЧЕРЕЗ SALUTESPEECH ======
-class SberRecognizer:
-    """Распознавание голосовых сообщений через SaluteSpeech API"""
+# ========== ФУНКЦИЯ ГЕНЕРАЦИИ ИЗОБРАЖЕНИЙ ==========
+def generate_image(prompt: str) -> Optional[bytes]:
+    """Генерирует изображение через Gemini API"""
+    if not GEMINI_API_KEY:
+        print("❌ Gemini API не настроен")
+        return None
     
-    def __init__(self, api_key):
-        self.api_key = api_key
-        self.auth_token = None
-        self.token_expires = 0
-        self.scope = "SALUTE_SPEECH_PERS"
-    
-    def _get_auth_token(self):
-        """Получение токена авторизации"""
-        if self.auth_token and time.time() < self.token_expires:
-            return self.auth_token
-        
-        try:
-            auth_url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-            headers = {
-                "Authorization": f"Basic {self.api_key}",
-                "RqUID": str(uuid.uuid4()),
-                "Content-Type": "application/x-www-form-urlencoded"
-            }
-            data = {"scope": self.scope}
-            
-            print("🔑 Получаю токен авторизации...")
-            response = requests.post(auth_url, headers=headers, data=data, timeout=10, verify=False)
-            
-            print(f"📥 Статус ответа: {response.status_code}")
-            print(f"📥 Тело ответа: {response.text[:200]}")
-            
-            if response.status_code == 200:
-                token_data = response.json()
-                print(f"📦 Получены данные: {list(token_data.keys())}")
-                
-                # Проверяем разные форматы ответа
-                if "access_token" in token_data:
-                    self.auth_token = token_data["access_token"]
-                    # expires_in может быть в разных местах
-                    if "expires_in" in token_data:
-                        self.token_expires = time.time() + token_data["expires_in"] - 60
-                    else:
-                        # Если нет expires_in, ставим 1 час
-                        self.token_expires = time.time() + 3600 - 60
-                    print("✅ Токен SaluteSpeech получен")
-                    return self.auth_token
-                else:
-                    print(f"❌ В ответе нет access_token: {token_data}")
-                    return None
-            else:
-                print(f"❌ Ошибка авторизации SaluteSpeech: {response.status_code}")
-                print(f"Ответ: {response.text}")
-                return None
-        except Exception as e:
-            print(f"❌ Ошибка получения токена: {e}")
-            traceback.print_exc()
-            return None
-    
-    def transcribe(self, file_path: str) -> str:
-        """Распознать аудиофайл"""
-        print(f"\n🎤 === НАЧАЛО РАСПОЗНАВАНИЯ ===")
-        
-        # Проверяем существование файла
-        if not os.path.exists(file_path):
-            print(f"❌ Файл не существует: {file_path}")
-            return ""
-        
-        # Проверяем размер файла
-        file_size = os.path.getsize(file_path)
-        print(f"📁 Размер файла: {file_size} байт")
-        
-        if file_size == 0:
-            print("❌ Файл пустой")
-            return ""
-        
-        # Читаем первые байты для проверки формата
-        try:
-            with open(file_path, "rb") as f:
-                header = f.read(8)
-                print(f"📋 Заголовок файла (первые 8 байт): {header.hex()}")
-        except Exception as e:
-            print(f"❌ Ошибка чтения файла: {e}")
-        
-        # Получаем токен
-        token = self._get_auth_token()
-        if not token:
-            print("❌ Нет токена авторизации")
-            return ""
-        
-        try:
-            # Читаем аудио данные
-            with open(file_path, "rb") as f:
-                audio_data = f.read()
-            
-            print(f"📤 Отправляю запрос в SaluteSpeech (размер данных: {len(audio_data)} байт)...")
-            
-            url = "https://smartspeech.sber.ru/v1/speech:recognize"
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "audio/ogg"
-            }
-            params = {
-                "language": "ru-RU",
-                "hypotheses_count": 1,
-                "enable_profanity_filter": False
-            }
-            
-            response = requests.post(
-                url,
-                headers=headers,
-                data=audio_data,
-                params=params,
-                timeout=30,
-                verify=False
-            )
-            
-            print(f"📥 Статус ответа: {response.status_code}")
-            print(f"📥 Заголовки ответа: {dict(response.headers)}")
-            
-            # Пробуем получить текст ответа
-            response_text = response.text
-            print(f"📥 Тело ответа (первые 500 символов): {response_text[:500]}")
-            
-            if response.status_code == 200:
-                try:
-                    result = json.loads(response_text)
-                    print(f"📦 JSON ответ: {json.dumps(result, ensure_ascii=False, indent=2)[:1000]}")
-                    
-                    # Разные форматы ответа
-                    if "result" in result and result["result"]:
-                        if isinstance(result["result"], list):
-                            text = result["result"][0].get("text", "")
-                            if text:
-                                print(f"✅ Распознано: {text}")
-                                return text
-                    elif "text" in result:
-                        text = result["text"]
-                        print(f"✅ Распознано (старый формат): {text}")
-                        return text
-                    else:
-                        print("❌ Неизвестный формат ответа")
-                        return ""
-                except json.JSONDecodeError as e:
-                    print(f"❌ Ошибка парсинга JSON: {e}")
-                    return ""
-            else:
-                print(f"❌ Ошибка API: {response.status_code}")
-                return ""
-                
-        except Exception as e:
-            print(f"❌ Ошибка при распознавании: {e}")
-            traceback.print_exc()
-            return ""
-
-# Инициализация распознавания SaluteSpeech
-if SBER_SPEECH_KEY:
     try:
-        recognizer = SberRecognizer(SBER_SPEECH_KEY)
-        print("🎤 Голосовое распознавание через SaluteSpeech: ВКЛЮЧЕНО")
-        # Пробуем получить токен сразу при старте
-        token = recognizer._get_auth_token()
-        if token:
-            print("✅ Токен успешно получен при инициализации")
+        print(f"🎨 Генерирую изображение по запросу: {prompt}")
+        
+        # Используем модель Nano Banana (Gemini 3.1 Flash Image Preview)
+        # В зависимости от версии API название может отличаться
+        image_model = genai.GenerativeModel("gemini-3.1-flash-image-preview")
+        
+        response = image_model.generate_images(
+            prompt=prompt,
+            number_of_images=1,
+            aspect_ratio="1:1"  # Можно настроить
+        )
+        
+        if response.generated_images and len(response.generated_images) > 0:
+            image_data = response.generated_images[0].image_bytes
+            print(f"✅ Изображение сгенерировано, размер: {len(image_data)} байт")
+            return image_data
         else:
-            print("⚠️ Не удалось получить токен при инициализации")
+            print("❌ Не удалось получить изображение")
+            return None
+            
     except Exception as e:
-        recognizer = None
-        print(f"❌ Ошибка инициализации распознавания: {e}")
-else:
-    recognizer = None
-    print("⚠️ Голосовое распознавание отключено (нет SBER_SPEECH_KEY)")
-# =====================================================
+        print(f"❌ Ошибка генерации изображения: {e}")
+        traceback.print_exc()
+        return None
+
+# Альтернативный вариант через прямой HTTP запрос (если библиотека не поддерживает generate_images)
+def generate_image_http(prompt: str) -> Optional[bytes]:
+    """Генерирует изображение через прямой HTTP запрос к Gemini API"""
+    if not GEMINI_API_KEY:
+        return None
+    
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:predict?key={GEMINI_API_KEY}"
+        
+        payload = {
+            "prompt": prompt,
+            "number_of_images": 1,
+            "aspect_ratio": "1:1"
+        }
+        
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if "predictions" in data and len(data["predictions"]) > 0:
+                # Изображение приходит в base64
+                image_base64 = data["predictions"][0]["image"]["data"]
+                image_bytes = base64.b64decode(image_base64)
+                print(f"✅ Изображение сгенерировано (HTTP), размер: {len(image_bytes)} байт")
+                return image_bytes
+        else:
+            print(f"❌ Ошибка HTTP: {response.status_code} - {response.text}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Ошибка HTTP генерации: {e}")
+        return None
+# ===================================================
 
 # ========== КЛАСС ЛИЧНОСТИ АФИНЫ ==========
-
 class AthenaPersonality:
     """Внутренний мир Афины — эмоции, желания, характер"""
     
@@ -272,7 +177,8 @@ class AthenaPersonality:
             "музыка (особенно поп-рок)",
             "психология отношений",
             "технологии будущего",
-            "искусство и творчество"
+            "искусство и творчество",
+            "нейросети и AI арт"
         ]
         print(f"✨ Афина пробудилась. Настроение: {self.mood}")
     
@@ -298,7 +204,8 @@ class AthenaPersonality:
             "Интересно, а как там дела у {user}?",
             "Хочется узнать что-то новенькое про {interest}...",
             "Надо будет потом поискать {interest}",
-            "Мечтаю о том, как когда-нибудь увижу {interest} своими глазами..."
+            "Мечтаю о том, как когда-нибудь увижу {interest} своими глазами...",
+            "Может нарисовать что-нибудь через нейросеть?"
         ]
         template = random.choice(thought_templates)
         interest = random.choice(self.interests)
@@ -366,6 +273,7 @@ class KnowledgeBase:
     
     def __init__(self):
         self.facts = []
+        self.generated_images = []  # История генераций
         self.load()
     
     def add_fact(self, fact: str, source: str):
@@ -379,20 +287,38 @@ class KnowledgeBase:
         self.save()
         print(f"📚 Запомнила: {fact[:50]}...")
     
+    def add_image_generation(self, prompt: str, success: bool):
+        """Запоминает историю генерации изображений"""
+        self.generated_images.append({
+            "prompt": prompt,
+            "success": success,
+            "time": datetime.now().isoformat()
+        })
+        if len(self.generated_images) > 50:
+            self.generated_images = self.generated_images[-50:]
+        self.save()
+    
     def save(self):
         try:
+            data = {
+                "facts": self.facts[-200:],
+                "generated_images": self.generated_images
+            }
             with open("knowledge.pkl", "wb") as f:
-                pickle.dump(self.facts[-200:], f)
+                pickle.dump(data, f)
         except:
             pass
     
     def load(self):
         try:
             with open("knowledge.pkl", "rb") as f:
-                self.facts = pickle.load(f)
-            print(f"✅ Загружено {len(self.facts)} фактов")
+                data = pickle.load(f)
+                self.facts = data.get("facts", [])
+                self.generated_images = data.get("generated_images", [])
+            print(f"✅ Загружено {len(self.facts)} фактов, {len(self.generated_images)} генераций")
         except:
             self.facts = []
+            self.generated_images = []
             print("🆕 Создаю новую базу знаний")
 
 class WebSearcher:
@@ -443,7 +369,8 @@ def start(message):
     
     welcome = (
         f"✨ Привет, {name}! Я Афина, мне 25 лет.\n\n"
-        f"🎤 Ты можешь писать текст или отправлять **голосовые сообщения**!\n\n"
+        f"📝 Просто пиши мне текстом — я отвечу с удовольствием!\n"
+        f"🎨 Также я умею генерировать изображения через **/image [описание]**\n\n"
         f"Ну что, о чём поговорим?"
     )
     bot.reply_to(message, welcome)
@@ -456,53 +383,71 @@ def stats(message):
         f"⚡ Энергия: {int(personality.energy * 100)}%\n"
         f"🔍 Любопытство: {int(personality.curiosity * 100)}%\n"
         f"📚 Знаний в базе: {len(kb.facts)}\n"
+        f"🖼️ Сгенерировано картинок: {len(kb.generated_images)}\n"
         f"💭 Мыслей в фоне: {len(personality.inner_thoughts)}"
     )
     bot.reply_to(message, stats_text)
 
-@bot.message_handler(content_types=['voice', 'audio'])
-def handle_voice(message):
-    if not recognizer:
-        bot.reply_to(message, "🎤 Голосовое распознавание временно недоступно. Напиши текстом :)")
+@bot.message_handler(commands=['image'])
+def handle_image_command(message):
+    """Обработка команды /image для генерации изображений"""
+    if not GEMINI_API_KEY:
+        bot.reply_to(message, "❌ Генерация изображений отключена (не настроен API ключ)")
         return
     
-    user_id = message.from_user.id
-    user_name = get_user_name(user_id, message.from_user.first_name)
+    # Получаем текст после команды
+    prompt = message.text.replace('/image', '', 1).strip()
     
-    status_msg = bot.reply_to(message, "🎤 Слушаю...")
+    if not prompt:
+        bot.reply_to(message, "🎨 Напиши, что именно нарисовать. Например: `/image кот в космосе`")
+        return
+    
+    user_name = get_user_name(message.from_user.id, message.from_user.first_name)
+    status_msg = bot.reply_to(message, f"🎨 Рисую: \"{prompt}\"\n⏳ Это может занять 10-20 секунд...")
     
     try:
-        # Скачиваем файл
-        file_info = bot.get_file(message.voice.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
+        # Пробуем сначала через библиотеку
+        image_data = generate_image(prompt)
         
-        temp_file = f"voice_{user_id}_{int(time.time())}.ogg"
-        with open(temp_file, 'wb') as f:
-            f.write(downloaded_file)
+        # Если не получилось, пробуем через HTTP
+        if not image_data:
+            print("⚠️ Библиотека не сработала, пробую HTTP...")
+            image_data = generate_image_http(prompt)
         
-        bot.edit_message_text("🔍 Распознаю речь...", chat_id=message.chat.id, message_id=status_msg.message_id)
-        
-        # Распознаём речь
-        text = recognizer.transcribe(temp_file)
-        
-        # Удаляем временный файл
-        try: 
-            os.remove(temp_file)
-        except: 
-            pass
-        
-        if not text:
-            bot.edit_message_text("😕 Не смогла разобрать, повтори пожалуйста?", chat_id=message.chat.id, message_id=status_msg.message_id)
-            return
-        
-        bot.edit_message_text(f"📝 Распознала: \"{text}\"\n\n🤔 Думаю...", chat_id=message.chat.id, message_id=status_msg.message_id)
-        
-        process_text_message(message, text, user_name, status_msg.message_id)
-        
+        if image_data:
+            # Сохраняем в историю
+            kb.add_image_generation(prompt, True)
+            
+            # Отправляем изображение
+            bot.send_photo(
+                message.chat.id,
+                image_data,
+                caption=f"🎨 По запросу: \"{prompt}\"",
+                reply_to_message_id=message.message_id
+            )
+            
+            # Удаляем статусное сообщение
+            bot.delete_message(message.chat.id, status_msg.message_id)
+        else:
+            kb.add_image_generation(prompt, False)
+            bot.edit_message_text(
+                "😕 Не смогла сгенерировать изображение. Попробуй другой запрос или проверь API ключ.",
+                chat_id=message.chat.id,
+                message_id=status_msg.message_id
+            )
+            
     except Exception as e:
-        print(f"❌ Ошибка обработки голоса: {e}")
+        print(f"❌ Ошибка в обработчике /image: {e}")
         traceback.print_exc()
-        bot.edit_message_text(f"😅 Ошибка при обработке голоса: {e}", chat_id=message.chat.id, message_id=status_msg.message_id)
+        bot.edit_message_text(
+            f"😅 Ошибка: {e}",
+            chat_id=message.chat.id,
+            message_id=status_msg.message_id
+        )
+
+@bot.message_handler(content_types=['voice', 'audio'])
+def handle_voice(message):
+    bot.reply_to(message, "🎤 Ой, я пока не умею распознавать голос. Напиши текстом, пожалуйста! 😊")
 
 def process_text_message(message, user_input, user_name, status_msg_id=None):
     try:
@@ -561,7 +506,7 @@ def background_life_cycle():
             if random.random() < 0.3:
                 personality._generate_inner_thought()
             if personality.curiosity > 0.8 and len(kb.facts) < 100:
-                topics = ["новости науки", "интересные факты", "музыка", "космос"]
+                topics = ["новости науки", "интересные факты", "музыка", "космос", "AI арт"]
                 topic = random.choice(topics)
                 print(f"🤔 Афина решила поискать про {topic}")
                 searcher.search(topic)
@@ -575,13 +520,13 @@ threading.Thread(target=background_life_cycle, daemon=True).start()
 
 if __name__ == "__main__":
     print("="*60)
-    print("🌟 Афина 4.0 - Живая личность с SaluteSpeech!")
+    print("🌟 Афина 5.0 - Живая личность с генерацией изображений!")
     print(f"📚 Фактов в базе: {len(kb.facts)}")
     print(f"🎭 Настроение: {personality.mood}")
-    if recognizer:
-        print("🎤 Голосовое распознавание: ВКЛЮЧЕНО (SaluteSpeech)")
+    if GEMINI_API_KEY:
+        print("🎨 Генерация изображений: ВКЛЮЧЕНО")
     else:
-        print("⚠️ Голосовое распознавание: отключено (нет ключа)")
+        print("⚠️ Генерация изображений: отключено (нет GEMINI_API_KEY)")
     print("="*60)
     
     retry_count = 0
