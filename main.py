@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Афина 4.0 - Живая личность с голосовым распознаванием и защитой от конфликтов
+Афина 4.0 - Живая личность с голосовым распознаванием через SaluteSpeech
 """
 
 import os
@@ -12,13 +12,12 @@ import requests
 import random
 import hashlib
 import uuid
-import urllib.request
-import zipfile
+import base64
 import fcntl
 import sys
 import signal
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from datetime import datetime
+from typing import List, Dict
 import telebot
 from langchain_gigachat.chat_models import GigaChat
 from duckduckgo_search import DDGS
@@ -61,57 +60,6 @@ signal.signal(signal.SIGTERM, cleanup)
 signal.signal(signal.SIGINT, cleanup)
 # ============================================
 
-# ====== НАСТРОЙКА VOSK ======
-VOSK_MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
-VOSK_MODEL_DIR = "vosk_model"
-
-def download_vosk_model():
-    """Скачивает и распаковывает модель Vosk при первом запуске"""
-    if os.path.exists(VOSK_MODEL_DIR) and len(os.listdir(VOSK_MODEL_DIR)) > 0:
-        print("✅ Модель Vosk уже есть")
-        return True
-    
-    print("📥 Скачиваю модель Vosk (40 МБ)...")
-    zip_path = "vosk_model.zip"
-    
-    try:
-        def report_hook(count, block_size, total_size):
-            percent = int(count * block_size * 100 / total_size)
-            print(f"\r⏳ Прогресс: {percent}%", end="")
-        
-        urllib.request.urlretrieve(VOSK_MODEL_URL, zip_path, reporthook=report_hook)
-        print("\n✅ Скачано, распаковываю...")
-        
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(".")
-        
-        extracted = [d for d in os.listdir('.') if d.startswith('vosk-model') and os.path.isdir(d)]
-        if extracted:
-            if os.path.exists(VOSK_MODEL_DIR):
-                import shutil
-                shutil.rmtree(VOSK_MODEL_DIR)
-            os.rename(extracted[0], VOSK_MODEL_DIR)
-        
-        os.remove(zip_path)
-        print(f"✅ Модель готова в папке {VOSK_MODEL_DIR}")
-        return True
-    except Exception as e:
-        print(f"❌ Ошибка загрузки модели: {e}")
-        return False
-
-VOSK_AVAILABLE = download_vosk_model()
-if VOSK_AVAILABLE:
-    try:
-        from vosk import Model, KaldiRecognizer
-        import wave
-        import subprocess
-        vosk_model = Model(VOSK_MODEL_DIR)
-        print("🎤 Vosk успешно инициализирован")
-    except Exception as e:
-        print(f"❌ Ошибка импорта Vosk: {e}")
-        VOSK_AVAILABLE = False
-# =============================
-
 # Подключаем GigaChat
 model = GigaChat(
     credentials=GIGACHAT_CREDENTIALS,
@@ -132,68 +80,89 @@ try:
 except Exception as e:
     print(f"⚠️ Ошибка при сбросе вебхука: {e}")
 
-# ========== КЛАСС ДЛЯ РАСПОЗНАВАНИЯ ГОЛОСА (VOSK) ==========
-
-class VoskRecognizer:
-    """Распознавание голосовых сообщений через Vosk (офлайн)"""
+# ====== РАСПОЗНАВАНИЕ ГОЛОСА ЧЕРЕЗ SALUTESPEECH ======
+class SberRecognizer:
+    """Распознавание голосовых сообщений через SaluteSpeech API"""
     
-    def __init__(self, model):
-        self.model = model
-        self.rec = KaldiRecognizer(self.model, 16000.0)
-        self.rec.SetWords(True)
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.auth_token = None
+        self.token_expires = 0
+        self.scope = "SALUTE_SPEECH_PERS"
     
-    def convert_ogg_to_wav(self, ogg_path, wav_path):
-        """Конвертирует OGG в WAV через ffmpeg"""
+    def _get_auth_token(self):
+        """Получение токена авторизации"""
+        if self.auth_token and time.time() < self.token_expires:
+            return self.auth_token
+        
         try:
-            cmd = ['ffmpeg', '-i', ogg_path, '-ar', '16000', '-ac', '1', wav_path, '-y']
-            subprocess.run(cmd, capture_output=True, check=True)
-            return True
+            auth_url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+            headers = {
+                "Authorization": f"Basic {self.api_key}",
+                "RqUID": str(uuid.uuid4()),
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+            data = {"scope": self.scope}
+            
+            response = requests.post(auth_url, headers=headers, data=data, timeout=10, verify=False)
+            if response.status_code == 200:
+                token_data = response.json()
+                self.auth_token = token_data["access_token"]
+                self.token_expires = time.time() + token_data["expires_in"] - 60
+                return self.auth_token
+            else:
+                print(f"Ошибка авторизации SaluteSpeech: {response.text}")
+                return None
         except Exception as e:
-            print(f"Ошибка конвертации: {e}")
-            return False
+            print(f"Ошибка получения токена: {e}")
+            return None
     
     def transcribe(self, file_path: str) -> str:
-        """Распознать голосовой файл"""
+        """Распознать аудиофайл"""
+        token = self._get_auth_token()
+        if not token:
+            return ""
+        
         try:
-            wav_path = file_path.replace('.ogg', '.wav')
-            if file_path.endswith('.ogg'):
-                if not self.convert_ogg_to_wav(file_path, wav_path):
-                    return ""
-                file_path = wav_path
+            url = "https://smartspeech.sber.ru/v1/speech:recognize"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "audio/ogg"
+            }
             
-            wf = wave.open(file_path, "rb")
-            if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getcomptype() != "NONE":
-                print("Аудиофайл должен быть WAV, mono PCM.")
+            with open(file_path, "rb") as f:
+                audio_data = f.read()
+            
+            response = requests.post(
+                url,
+                headers=headers,
+                data=audio_data,
+                params={"language": "ru-RU"},
+                timeout=30,
+                verify=False
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if "result" in result:
+                    return result["result"][0]["text"]
+                else:
+                    return result.get("text", "")
+            else:
+                print(f"Ошибка распознавания: {response.text}")
                 return ""
-            
-            results = []
-            while True:
-                data = wf.readframes(4000)
-                if len(data) == 0:
-                    break
-                if self.rec.AcceptWaveform(data):
-                    res = json.loads(self.rec.Result())
-                    results.append(res.get('text', ''))
-            
-            res = json.loads(self.rec.FinalResult())
-            results.append(res.get('text', ''))
-            
-            try:
-                os.remove(file_path)
-            except:
-                pass
-            
-            return ' '.join(results)
         except Exception as e:
-            print(f"Ошибка распознавания Vosk: {e}")
+            print(f"Ошибка при распознавании: {e}")
             return ""
 
-if VOSK_AVAILABLE:
-    recognizer = VoskRecognizer(vosk_model)
-    print("🎤 Голосовое распознавание через Vosk: ВКЛЮЧЕНО")
+# Инициализация распознавания SaluteSpeech
+if SBER_SPEECH_KEY:
+    recognizer = SberRecognizer(SBER_SPEECH_KEY)
+    print("🎤 Голосовое распознавание через SaluteSpeech: ВКЛЮЧЕНО")
 else:
     recognizer = None
-    print("⚠️ Голосовое распознавание: отключено")
+    print("⚠️ Голосовое распознавание отключено (нет SBER_SPEECH_KEY)")
+# =====================================================
 
 # ========== КЛАСС ЛИЧНОСТИ АФИНЫ ==========
 
@@ -260,16 +229,13 @@ class AthenaPersonality:
     
     def react_to_message(self, message: str):
         """Реакция на сообщение (меняет состояние)"""
-        # Если сообщение длинное, повышаем любопытство
         if len(message.split()) > 3:
             self.curiosity = min(1.0, self.curiosity + 0.02)
         
-        # Если сообщение позитивное, повышаем энергию
         positive_words = ["😊", "❤️", "круто", "отлично", "супер", "класс", "рад", "love", "❤", "🔥"]
         if any(word in message.lower() for word in positive_words):
             self.energy = min(1.0, self.energy + 0.03)
         
-        # Если вопрос, повышаем любопытство ещё
         if "?" in message:
             self.curiosity = min(1.0, self.curiosity + 0.03)
     
@@ -408,7 +374,7 @@ def stats(message):
 @bot.message_handler(content_types=['voice', 'audio'])
 def handle_voice(message):
     if not recognizer:
-        bot.reply_to(message, "❌ Голосовое распознавание временно недоступно.")
+        bot.reply_to(message, "🎤 Голосовое распознавание временно недоступно. Напиши текстом :)")
         return
     
     user_id = message.from_user.id
@@ -429,8 +395,10 @@ def handle_voice(message):
         
         text = recognizer.transcribe(temp_file)
         
-        try: os.remove(temp_file)
-        except: pass
+        try: 
+            os.remove(temp_file)
+        except: 
+            pass
         
         if not text:
             bot.edit_message_text("😕 Не смогла разобрать, повтори пожалуйста?", chat_id=message.chat.id, message_id=status_msg.message_id)
@@ -514,13 +482,13 @@ threading.Thread(target=background_life_cycle, daemon=True).start()
 
 if __name__ == "__main__":
     print("="*60)
-    print("🌟 Афина 4.0 - Живая личность с Vosk!")
+    print("🌟 Афина 4.0 - Живая личность с SaluteSpeech!")
     print(f"📚 Фактов в базе: {len(kb.facts)}")
     print(f"🎭 Настроение: {personality.mood}")
     if recognizer:
-        print("🎤 Голосовое распознавание: ВКЛЮЧЕНО (Vosk)")
+        print("🎤 Голосовое распознавание: ВКЛЮЧЕНО (SaluteSpeech)")
     else:
-        print("⚠️ Голосовое распознавание: отключено")
+        print("⚠️ Голосовое распознавание: отключено (нет ключа)")
     print("="*60)
     
     retry_count = 0
