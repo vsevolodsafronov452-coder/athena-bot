@@ -1,0 +1,4 @@
+langchain-gigachat
+pyTelegramBotAPI
+requests
+duckduckgo-search
