@@ -258,6 +258,21 @@ class AthenaPersonality:
         print(f"💭 [Внутренняя мысль]: {thought}")
         return thought
     
+    def react_to_message(self, message: str):
+        """Реакция на сообщение (меняет состояние)"""
+        # Если сообщение длинное, повышаем любопытство
+        if len(message.split()) > 3:
+            self.curiosity = min(1.0, self.curiosity + 0.02)
+        
+        # Если сообщение позитивное, повышаем энергию
+        positive_words = ["😊", "❤️", "круто", "отлично", "супер", "класс", "рад", "love", "❤", "🔥"]
+        if any(word in message.lower() for word in positive_words):
+            self.energy = min(1.0, self.energy + 0.03)
+        
+        # Если вопрос, повышаем любопытство ещё
+        if "?" in message:
+            self.curiosity = min(1.0, self.curiosity + 0.03)
+    
     def get_mood_description(self) -> str:
         """Описание настроения для промпта"""
         descriptions = {
@@ -431,6 +446,7 @@ def handle_voice(message):
 
 def process_text_message(message, user_input, user_name, status_msg_id=None):
     try:
+        personality.react_to_message(user_input)
         personality.update()
         
         need_search = (len(user_input.split()) > 2 and 
