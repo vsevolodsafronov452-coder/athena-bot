@@ -168,6 +168,16 @@ class SberRecognizer:
             return ""
 # =====================================================
 
+# Инициализация распознавания SaluteSpeech
+if SBER_SPEECH_KEY:
+    recognizer = SberRecognizer(SBER_SPEECH_KEY)
+    print("🎤 Голосовое распознавание через SaluteSpeech: ВКЛЮЧЕНО")
+else:
+    recognizer = None
+    print("⚠️ Голосовое распознавание отключено (нет SBER_SPEECH_KEY)")
+
+# ========== КЛАСС ЛИЧНОСТИ АФИНЫ ==========
+
 # ========== КЛАСС ЛИЧНОСТИ АФИНЫ ==========
 
 class AthenaPersonality:
