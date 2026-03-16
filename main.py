@@ -108,18 +108,34 @@ class SberRecognizer:
             print("🔑 Получаю токен авторизации...")
             response = requests.post(auth_url, headers=headers, data=data, timeout=10, verify=False)
             
+            print(f"📥 Статус ответа: {response.status_code}")
+            print(f"📥 Тело ответа: {response.text[:200]}")
+            
             if response.status_code == 200:
                 token_data = response.json()
-                self.auth_token = token_data["access_token"]
-                self.token_expires = time.time() + token_data["expires_in"] - 60
-                print("✅ Токен SaluteSpeech получен")
-                return self.auth_token
+                print(f"📦 Получены данные: {list(token_data.keys())}")
+                
+                # Проверяем разные форматы ответа
+                if "access_token" in token_data:
+                    self.auth_token = token_data["access_token"]
+                    # expires_in может быть в разных местах
+                    if "expires_in" in token_data:
+                        self.token_expires = time.time() + token_data["expires_in"] - 60
+                    else:
+                        # Если нет expires_in, ставим 1 час
+                        self.token_expires = time.time() + 3600 - 60
+                    print("✅ Токен SaluteSpeech получен")
+                    return self.auth_token
+                else:
+                    print(f"❌ В ответе нет access_token: {token_data}")
+                    return None
             else:
                 print(f"❌ Ошибка авторизации SaluteSpeech: {response.status_code}")
                 print(f"Ответ: {response.text}")
                 return None
         except Exception as e:
             print(f"❌ Ошибка получения токена: {e}")
+            traceback.print_exc()
             return None
     
     def transcribe(self, file_path: str) -> str:
