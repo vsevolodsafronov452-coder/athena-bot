@@ -81,6 +81,10 @@ except Exception as e:
     print(f"⚠️ Ошибка при сбросе вебхука: {e}")
 
 # ====== РАСПОЗНАВАНИЕ ГОЛОСА ЧЕРЕЗ SALUTESPEECH ======
+import base64
+import requests
+import uuid
+
 class SberRecognizer:
     """Распознавание голосовых сообщений через SaluteSpeech API"""
     
@@ -109,12 +113,13 @@ class SberRecognizer:
                 token_data = response.json()
                 self.auth_token = token_data["access_token"]
                 self.token_expires = time.time() + token_data["expires_in"] - 60
+                print("✅ Токен SaluteSpeech получен")
                 return self.auth_token
             else:
-                print(f"Ошибка авторизации SaluteSpeech: {response.text}")
+                print(f"❌ Ошибка авторизации SaluteSpeech: {response.status_code}")
                 return None
         except Exception as e:
-            print(f"Ошибка получения токена: {e}")
+            print(f"❌ Ошибка получения токена: {e}")
             return None
     
     def transcribe(self, file_path: str) -> str:
@@ -133,6 +138,8 @@ class SberRecognizer:
             with open(file_path, "rb") as f:
                 audio_data = f.read()
             
+            print(f"📤 Отправляю аудио ({len(audio_data)} байт) на распознавание...")
+            
             response = requests.post(
                 url,
                 headers=headers,
@@ -142,26 +149,23 @@ class SberRecognizer:
                 verify=False
             )
             
+            print(f"📥 Статус ответа: {response.status_code}")
+            
             if response.status_code == 200:
                 result = response.json()
-                if "result" in result:
-                    return result["result"][0]["text"]
+                if "result" in result and result["result"]:
+                    text = result["result"][0]["text"]
+                    print(f"✅ Распознано: {text}")
+                    return text
                 else:
-                    return result.get("text", "")
+                    print("❌ Пустой ответ от API")
+                    return ""
             else:
-                print(f"Ошибка распознавания: {response.text}")
+                print(f"❌ Ошибка API: {response.status_code} - {response.text}")
                 return ""
         except Exception as e:
-            print(f"Ошибка при распознавании: {e}")
+            print(f"❌ Ошибка при распознавании: {e}")
             return ""
-
-# Инициализация распознавания SaluteSpeech
-if SBER_SPEECH_KEY:
-    recognizer = SberRecognizer(SBER_SPEECH_KEY)
-    print("🎤 Голосовое распознавание через SaluteSpeech: ВКЛЮЧЕНО")
-else:
-    recognizer = None
-    print("⚠️ Голосовое распознавание отключено (нет SBER_SPEECH_KEY)")
 # =====================================================
 
 # ========== КЛАСС ЛИЧНОСТИ АФИНЫ ==========
