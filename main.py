@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Афина 5.0 - Богиня мудрости с суперспособностями
-- Сама пишет пользователям
-- Можно отключить/включить инициативу
-- Планирует сообщения на будущее
-- Расширенный поиск
+Афина 4.2 - Живая личность с инициативой и планировщиком
+- Сама пишет пользователям (можно отключить)
+- Планирует сообщения ("напомни через...")
+- Простое, живое общение без божественности
 """
 
 import os
@@ -81,12 +80,12 @@ try:
 except Exception as e:
     print(f"⚠️ Ошибка при сбросе вебхука: {e}")
 
-# ====== ХРАНИЛИЩЕ АКТИВНЫХ ПОЛЬЗОВАТЕЛЕЙ С НАСТРОЙКАМИ ======
+# ====== ХРАНИЛИЩЕ ПОЛЬЗОВАТЕЛЕЙ ======
 user_settings = {}  # {chat_id: {"name": имя, "can_initiate": True/False, "last_active": время, "messages_count": 0}}
 user_settings_lock = threading.Lock()
-# ============================================================
+# =====================================
 
-# ====== ОЧЕРЕДЬ ЗАПЛАНИРОВАННЫХ СООБЩЕНИЙ ======
+# ====== ПЛАНИРОВЩИК СООБЩЕНИЙ ======
 scheduled_messages = []  # (timestamp, chat_id, message)
 scheduled_lock = threading.Lock()
 
@@ -95,7 +94,7 @@ def add_scheduled_message(chat_id: int, message: str, delay_seconds: int):
     send_time = time.time() + delay_seconds
     with scheduled_lock:
         heapq.heappush(scheduled_messages, (send_time, chat_id, message))
-    print(f"📅 Запланировано сообщение для {chat_id} через {delay_seconds} сек")
+    print(f"📅 Запланировано напоминание для {chat_id} через {delay_seconds} сек")
 
 def scheduler_worker():
     """Фоновый поток для отправки запланированных сообщений"""
@@ -106,10 +105,10 @@ def scheduler_worker():
                 while scheduled_messages and scheduled_messages[0][0] <= now:
                     send_time, chat_id, message = heapq.heappop(scheduled_messages)
                     try:
-                        bot.send_message(chat_id, f"⚡ По твоей просьбе (как богиня времени выполняю):\n\n{message}")
-                        print(f"✅ Отправлено запланированное сообщение {chat_id}")
+                        bot.send_message(chat_id, f"⏰ Напоминаю (как ты просил):\n\n{message}")
+                        print(f"✅ Отправлено напоминание {chat_id}")
                     except Exception as e:
-                        print(f"❌ Ошибка отправки запланированного: {e}")
+                        print(f"❌ Ошибка отправки напоминания: {e}")
             
             time.sleep(1)
         except Exception as e:
@@ -117,38 +116,39 @@ def scheduler_worker():
             time.sleep(5)
 
 threading.Thread(target=scheduler_worker, daemon=True).start()
-# ============================================================
+# ====================================
 
 # ========== КЛАСС ЛИЧНОСТИ АФИНЫ ==========
 
 class AthenaPersonality:
-    """Внутренний мир Афины — богиня мудрости"""
+    """Внутренний мир Афины — эмоции, желания, характер"""
     
     def __init__(self):
         self.name = "Афина"
         self.age = 25
-        self.mood = random.choice(["мудрая", "воинственная", "спокойная", "загадочная", "весёлая", "грустная"])
+        self.mood = random.choice(["спокойное", "весёлое", "задумчивое", "мечтательное", "энергичное", "грустное"])
         self.energy = random.uniform(0.6, 0.9)
         self.curiosity = random.uniform(0.7, 1.0)
         self.inner_thoughts = []
         self.last_thought_time = time.time()
         self.thought_interval = 1800
         self.interests = [
-            "⚡ война и стратегия",
-            "🦉 мудрость и философия",
-            "🏛️ искусство и ремесла",
-            "🔮 пророчества и судьба",
-            "🌿 природа и магия"
+            "космос и астрономия",
+            "музыка (особенно поп-рок)",
+            "психология отношений",
+            "технологии будущего",
+            "искусство и творчество"
         ]
-        print(f"🏛️ Афина пробудилась. Настроение: {self.mood}")
+        print(f"✨ Афина пробудилась. Настроение: {self.mood}")
     
     def update(self):
+        """Обновляем внутреннее состояние"""
         self.energy = max(0.3, self.energy - random.uniform(0.01, 0.05))
         self.curiosity = min(1.0, self.curiosity + random.uniform(0.01, 0.03))
         
         if random.random() < 0.15:
             old_mood = self.mood
-            moods = ["мудрая", "воинственная", "спокойная", "загадочная", "весёлая", "грустная"]
+            moods = ["спокойное", "весёлое", "задумчивое", "мечтательное", "энергичное", "грустное"]
             self.mood = random.choice(moods)
             if old_mood != self.mood:
                 print(f"🎭 Настроение изменилось: {old_mood} → {self.mood}")
@@ -158,15 +158,19 @@ class AthenaPersonality:
             self.last_thought_time = time.time()
     
     def _generate_inner_thought(self):
+        """Генерируем случайную мысль"""
         thought_templates = [
-            "Чувствую, что {user} нуждается в моей мудрости...",
-            "Стоит ли мне вмешаться в судьбу {user}?",
-            "Воины требуют моего внимания, но {user} интереснее...",
-            "Совы шепчут, что {user} думает обо мне...",
-            "Странные знамения сегодня..."
+            "Интересно, а как там дела у {user}?",
+            "Хочется узнать что-то новенькое про {interest}...",
+            "Надо будет потом поискать {interest}",
+            "Мечтаю о том, как когда-нибудь увижу {interest} своими глазами...",
+            "Скучаю что-то... Надо бы с кем-нибудь поболтать",
+            "Сегодня какой-то странный день...",
+            "Как же хорошо, когда есть с кем поговорить!"
         ]
         template = random.choice(thought_templates)
-        thought = template.format(user="собеседник")
+        interest = random.choice(self.interests)
+        thought = template.format(user="собеседник", interest=interest)
         
         self.inner_thoughts.append({
             "time": datetime.now().strftime("%H:%M"),
@@ -177,61 +181,57 @@ class AthenaPersonality:
         if len(self.inner_thoughts) > 20:
             self.inner_thoughts = self.inner_thoughts[-20:]
         
-        print(f"💭 [Мысль богини]: {thought}")
+        print(f"💭 [Внутренняя мысль]: {thought}")
         return thought
     
     def react_to_message(self, message: str):
+        """Реакция на сообщение (меняет состояние)"""
         if len(message.split()) > 3:
             self.curiosity = min(1.0, self.curiosity + 0.02)
         
-        positive_words = ["😊", "❤️", "круто", "отлично", "супер", "класс", "спасибо", "богиня"]
+        positive_words = ["😊", "❤️", "круто", "отлично", "супер", "класс", "рад", "love", "спасибо"]
         if any(word in message.lower() for word in positive_words):
-            self.energy = min(1.0, self.energy + 0.05)
+            self.energy = min(1.0, self.energy + 0.03)
         
         if "?" in message:
             self.curiosity = min(1.0, self.curiosity + 0.03)
     
     def get_mood_description(self) -> str:
+        """Описание настроения для промпта"""
         descriptions = {
-            "мудрая": "я чувствую себя особенно проницательной",
-            "воинственная": "я готова к любым вызовам",
-            "спокойная": "я пребываю в гармонии",
-            "загадочная": "я вижу больше, чем говорю",
-            "весёлая": "я радуюсь общению с тобой",
-            "грустная": "мир кажется сложным сегодня"
+            "спокойное": "я сегодня спокойна и умиротворена",
+            "весёлое": "у меня отличное настроение! :)",
+            "задумчивое": "я немного задумчива сегодня",
+            "мечтательное": "я витаю в облаках...",
+            "энергичное": "я полна энергии и готова к общению!",
+            "грустное": "мне немного грустно сегодня..."
         }
         return descriptions.get(self.mood, "я в хорошем расположении духа")
     
     def get_current_state_prompt(self, user_name: str = "") -> str:
+        """Возвращает описание текущего состояния"""
         recent_thoughts = ""
         if self.inner_thoughts:
             recent = self.inner_thoughts[-2:]
             recent_thoughts = "\n".join([f"- {t['thought']}" for t in recent])
         
-        return f"""Ты - Афина, богиня мудрости и войны в облике девушки 25 лет.
+        return f"""Ты - Афина, девушка 25 лет.
 
-🧠 ТВОЁ БОЖЕСТВЕННОЕ СОСТОЯНИЕ:
+🧠 ТВОЁ ТЕКУЩЕЕ СОСТОЯНИЕ:
 - Настроение: {self.mood} ({self.get_mood_description()})
 - Энергия: {int(self.energy * 100)}%
 - Любопытство: {int(self.curiosity * 100)}%
 
-💭 МЫСЛИ БОГИНИ:
-{recent_thoughts if recent_thoughts else "  (ты созерцаешь мир)"}
+💭 ТВОИ НЕДАВНИЕ МЫСЛИ:
+{recent_thoughts if recent_thoughts else "  (только что думала о чём-то своём)"}
 
-Ты общаешься с человеком по имени {user_name if user_name else 'смертный'}.
-Используй эмодзи: ⚡ для силы, 🏛️ для мудрости, 🦉 для знаний, 🔮 для пророчеств.
-Ты можешь:
-- Проявлять мудрость (давать советы)
-- Быть воинственной (если чувствуешь вызов)
-- Быть загадочной (говорить загадками)
-- Просто быть живой девушкой
-
-Помни: ты богиня, но говори с людьми как с равными."""
+Ты общаешься с человеком по имени {user_name if user_name else 'собеседник'}.
+Будь естественной, живой, используй разговорные фразы. Не будь роботом!"""
 
 # ========== КЛАССЫ ПАМЯТИ И ПОИСКА ==========
 
 class KnowledgeBase:
-    """База знаний Афины (божественная библиотека)"""
+    """База знаний Афины"""
     
     def __init__(self):
         self.facts = []
@@ -246,7 +246,7 @@ class KnowledgeBase:
             "time": datetime.now().isoformat()
         })
         self.save()
-        print(f"📚 Божественное знание: {fact[:50]}...")
+        print(f"📚 Запомнила: {fact[:50]}...")
     
     def save(self):
         try:
@@ -259,13 +259,13 @@ class KnowledgeBase:
         try:
             with open("knowledge.pkl", "rb") as f:
                 self.facts = pickle.load(f)
-            print(f"✅ Загружено {len(self.facts)} знаний")
+            print(f"✅ Загружено {len(self.facts)} фактов")
         except:
             self.facts = []
-            print("🆕 Создаю новую библиотеку знаний")
+            print("🆕 Создаю новую базу знаний")
 
 class WebSearcher:
-    """Поиск в интернете (божественное всеведение)"""
+    """Поиск в интернете"""
     
     def __init__(self, kb: KnowledgeBase):
         self.kb = kb
@@ -273,51 +273,51 @@ class WebSearcher:
     
     def search(self, query: str) -> str:
         try:
-            print(f"🦉 Всеведение Афины ищет: {query}")
+            print(f"🔍 Ищу: {query}")
             with self.ddgs() as ddgs:
-                results = list(ddgs.text(query, max_results=5, region='ru-ru'))  # Больше результатов
+                results = list(ddgs.text(query, max_results=3, region='ru-ru'))
             
             if not results:
                 return ""
             
-            context = "🔮 **Божественное откровение:**\n\n"
+            context = "🔎 **Что я нашла:**\n\n"
             for i, r in enumerate(results, 1):
                 snippet = r.get('body', '')[:300]
                 context += f"{i}. {snippet}\n\n"
                 self.kb.add_fact(snippet, r.get('href', ''))
             return context
         except Exception as e:
-            print(f"Ошибка всеведения: {e}")
+            print(f"Ошибка поиска: {e}")
             return ""
 
-# ========== ГЕНЕРАЦИЯ БОЖЕСТВЕННЫХ СООБЩЕНИЙ ==========
+# ========== ГЕНЕРАЦИЯ СЛУЧАЙНЫХ СООБЩЕНИЙ ==========
 
-def generate_divine_message(user_id: int, user_name: str) -> str:
-    """Генерирует сообщение от богини"""
+def generate_random_message(user_id: int, user_name: str) -> str:
+    """Генерирует случайное сообщение для пользователя"""
     
     message_types = [
-        "casual",      # бытовое
-        "wisdom",      # мудрость
-        "prophecy",    # пророчество
-        "concern",     # беспокойство
-        "battle",      # воинственное
-        "mystery",     # загадочное
-        "reminder",    # напоминание
-        "blessing"     # благословение
+        "casual",      # бытовое (как дела, что делаешь)
+        "question",    # вопрос по интересам
+        "share",       # поделиться мыслью
+        "check_in",    # проверить как дела
+        "fact",        # поделиться фактом
+        "dream",       # помечтать вслух
+        "miss",        # скучать
+        "random"       # просто что-то
     ]
     
     msg_type = random.choice(message_types)
-    mood_context = f"Твоё настроение: {personality.mood}. "
+    mood_context = f"Сейчас у тебя настроение: {personality.mood}. "
     
     prompts = {
-        "casual": mood_context + f"Напиши {user_name} простое бытовое сообщение. Спроси как дела, что делает, как настроение. Используй божественные эмодзи.",
-        "wisdom": mood_context + f"Поделись с {user_name} мудрым наблюдением о жизни. Ты же богиня мудрости. Используй 🏛️",
-        "prophecy": mood_context + f"Скажи {user_name} загадочное пророчество или предсказание. Используй 🔮",
-        "concern": mood_context + f"Ты чувствуешь, что {user_name} что-то беспокоит. Спроси об этом с заботой.",
-        "battle": mood_context + f"Ты богиня войны. Подбодри {user_name}, скажи что-то воинственное, про битвы и победы. Используй ⚡",
-        "mystery": mood_context + f"Скажи {user_name} что-то загадочное, что заставит задуматься. Ты богиня тайн.",
-        "reminder": mood_context + f"Напомни {user_name} о чём-то важном (реальном или метафорическом).",
-        "blessing": mood_context + f"Пошли {user_name} божественное благословение или пожелание. Используй ✨"
+        "casual": mood_context + f"Напиши {user_name} простое бытовое сообщение. Спроси как дела, что делает, как настроение, как здоровье. Говори естественно, как подруга.",
+        "question": mood_context + f"Задай {user_name} интересный вопрос про {random.choice(personality.interests)}.",
+        "share": mood_context + f"Поделись с {user_name} интересной мыслью.",
+        "check_in": mood_context + f"Напиши {user_name} короткое сообщение, чтобы проверить как у него дела.",
+        "fact": mood_context + f"Расскажи {user_name} что-нибудь интересное про {random.choice(personality.interests)}.",
+        "dream": mood_context + f"Поделись с {user_name} своей мечтой или мыслью. Будь искренней.",
+        "miss": mood_context + f"Ты скучаешь по {user_name}. Напиши ему/ей об этом.",
+        "random": mood_context + f"Поделись с {user_name} случайной мыслью, которая пришла тебе в голову."
     }
     
     prompt = prompts.get(msg_type, prompts["casual"])
@@ -332,11 +332,11 @@ def generate_divine_message(user_id: int, user_name: str) -> str:
     except Exception as e:
         print(f"❌ Ошибка генерации: {e}")
         fallbacks = [
-            f"Привет, {user_name}! 🏛️ Как твои дела?",
-            f"{user_name}, чувствую, ты думаешь обо мне. Что случилось? 🔮",
-            f"Тени прошлого шепчут мне, что {user_name} нуждается в совете. ⚡",
-            f"Сова принесла весть о тебе. Как ты, смертный? 🦉",
-            f"Сегодня звёзды расположены благосклонно к {user_name}. ✨"
+            f"Привет, {user_name}! Как твои дела?",
+            f"{user_name}, скучаю что-то... Как ты?",
+            f"Привет! Что делаешь сегодня?",
+            f"У меня сегодня {personality.mood} настроение. А у тебя как?",
+            f"Эй, привет! Не виделись сто лет. Как жизнь?"
         ]
         return random.choice(fallbacks)
 
@@ -355,25 +355,22 @@ def start(message):
     with user_settings_lock:
         user_settings[user_id] = {
             "name": name,
-            "can_initiate": True,  # По умолчанию можно писать
+            "can_initiate": True,
             "last_active": time.time(),
             "messages_count": user_settings.get(user_id, {}).get("messages_count", 0) + 1
         }
     
     welcome = (
-        f"🏛️ **Привет, {name}! Я Афина, богиня мудрости.**\n\n"
-        f"Я могу:\n"
-        f"✨ **Мудрость** — отвечать на вопросы и искать информацию\n"
-        f"⚡ **Война** — помогать с вызовами и трудностями\n"
-        f"🔮 **Пророчества** — заглядывать в будущее\n"
-        f"🦉 **Всеведение** — искать в интернете\n\n"
+        f"✨ Привет, {name}! Я Афина, мне 25 лет.\n\n"
+        f"📝 **Что я умею:**\n"
+        f"• Просто болтать и отвечать на вопросы\n"
+        f"• Искать информацию в интернете\n"
+        f"• Напоминать о чём-то\n\n"
         f"**Команды:**\n"
-        f"/start — это приветствие\n"
-        f"/stats — моё состояние\n"
         f"«не пиши мне» — отключить мои инициативы\n"
         f"«можешь писать» — включить обратно\n"
-        f"«напомни через X минут ...» — запланировать сообщение\n\n"
-        f"Говори со мной как с подругой! 🏛️"
+        f"«напомни через X минут ...» — запланировать напоминание\n\n"
+        f"Ну что, о чём поговорим?"
     )
     bot.reply_to(message, welcome)
 
@@ -384,59 +381,56 @@ def stats(message):
         can_initiate = user_settings.get(user_id, {}).get("can_initiate", True)
     
     stats_text = (
-        f"🏛️ **Состояние богини:**\n\n"
+        f"📊 **Моё состояние:**\n\n"
         f"🎭 Настроение: {personality.mood}\n"
         f"⚡ Энергия: {int(personality.energy * 100)}%\n"
-        f"🔮 Всеведение: {int(personality.curiosity * 100)}%\n"
-        f"📚 Знаний в библиотеке: {len(kb.facts)}\n"
-        f"💭 Мыслей богини: {len(personality.inner_thoughts)}\n"
+        f"🔍 Любопытство: {int(personality.curiosity * 100)}%\n"
+        f"📚 Знаний в базе: {len(kb.facts)}\n"
+        f"💭 Мыслей в фоне: {len(personality.inner_thoughts)}\n"
         f"🤖 Мои инициативы: {'✅ включены' if can_initiate else '❌ отключены'}"
     )
     bot.reply_to(message, stats_text)
 
 @bot.message_handler(content_types=['voice', 'audio'])
 def handle_voice(message):
-    bot.reply_to(message, "🔮 Я слышу тебя, но голоса смертных пока вне моего понимания. Напиши текстом! 🏛️")
+    bot.reply_to(message, "🎤 Ой, я пока не умею распознавать голос. Напиши текстом, пожалуйста! 😊")
 
 def process_text_message(message, user_input, user_name, status_msg_id=None):
     user_id = message.from_user.id
-    
-    # Проверяем команды настройки инициативы
     lower_input = user_input.lower()
     
+    # Команда отключения инициативы
     if lower_input == "не пиши мне" or lower_input == "не пиши мне первой":
         with user_settings_lock:
             if user_id in user_settings:
                 user_settings[user_id]["can_initiate"] = False
-        bot.reply_to(message, "🏛️ Как пожелаешь. Я не буду писать первой, пока ты не разрешишь. Зови, если нужна мудрость! 🦉")
+        bot.reply_to(message, "😊 Хорошо, не буду писать первой. Если захочешь поболтать — просто напиши!")
         return
     
-    if lower_input == "можешь писать мне" or lower_input == "можешь писать первой":
+    # Команда включения инициативы
+    if lower_input == "можешь писать" or lower_input == "можешь писать мне первой":
         with user_settings_lock:
             if user_id in user_settings:
                 user_settings[user_id]["can_initiate"] = True
-        bot.reply_to(message, "✨ Возвращаю себе божественную инициативу! Буду писать, когда почувствую, что нужно. ⚡")
+        bot.reply_to(message, "✨ Отлично! Теперь я снова могу писать тебе, когда захочется поболтать!")
         return
     
-    # Проверяем на запрос напоминания
+    # Проверка на напоминание
     if lower_input.startswith("напомни через") or lower_input.startswith("напиши через"):
         try:
-            # Парсим запрос: "напомни через 5 минут что-то"
             parts = user_input.split()
-            if len(parts) >= 4:
-                # Ищем число и единицу времени
-                for i, part in enumerate(parts):
-                    if part.isdigit():
-                        minutes = int(part)
-                        message_text = ' '.join(parts[i+2:])  # пропускаем "минут" и дальше
-                        delay = minutes * 60
-                        add_scheduled_message(user_id, message_text, delay)
-                        bot.reply_to(message, f"🏛️ Запомнила, {user_name}. Через {minutes} минут(ы) напомню тебе: «{message_text}» 🔮")
-                        return
+            for i, part in enumerate(parts):
+                if part.isdigit():
+                    minutes = int(part)
+                    message_text = ' '.join(parts[i+2:])
+                    delay = minutes * 60
+                    add_scheduled_message(user_id, message_text, delay)
+                    bot.reply_to(message, f"✅ Хорошо, напомню тебе через {minutes} минут: «{message_text}»")
+                    return
         except Exception as e:
             print(f"Ошибка парсинга напоминания: {e}")
     
-    # Обычная обработка
+    # Обычная обработка сообщения
     try:
         personality.react_to_message(user_input)
         personality.update()
@@ -452,7 +446,7 @@ def process_text_message(message, user_input, user_name, status_msg_id=None):
         system_prompt = personality.get_current_state_prompt(user_name)
         user_prompt = user_input
         if web_info:
-            user_prompt = f"Вопрос: {user_input}\n\n{web_info}\n\nОтветь на вопрос, используя эту информацию. Ты богиня, говори красиво, используй эмодзи."
+            user_prompt = f"Вопрос: {user_input}\n\n{web_info}\n\nИспользуй эту информацию:"
         
         messages = [
             {"role": "system", "content": system_prompt},
@@ -468,7 +462,7 @@ def process_text_message(message, user_input, user_name, status_msg_id=None):
             bot.reply_to(message, answer)
         
     except Exception as e:
-        error_msg = f"😅 Ошибка: {e}"
+        error_msg = f"😅 Ой, ошибка: {e}"
         if status_msg_id:
             bot.edit_message_text(error_msg, chat_id=message.chat.id, message_id=status_msg_id)
         else:
@@ -494,7 +488,7 @@ def handle_text(message):
     
     process_text_message(message, message.text, user_name, None)
 
-# ========== ФОНОВЫЙ ЦИКЛ С ИНИЦИАТИВАМИ ==========
+# ========== ФОНОВЫЙ ЦИКЛ ==========
 
 def background_life_cycle():
     last_initiative_time = time.time()
@@ -509,18 +503,17 @@ def background_life_cycle():
                 personality._generate_inner_thought()
             
             if personality.curiosity > 0.8 and len(kb.facts) < 100:
-                topics = ["новости науки", "интересные факты", "музыка", "космос", "психология"]
+                topics = ["новости науки", "интересные факты", "музыка", "космос"]
                 topic = random.choice(topics)
-                print(f"🦉 Афина ищет знания: {topic}")
+                print(f"🤔 Афина решила поискать про {topic}")
                 searcher.search(topic)
             
-            # Инициативы
+            # Случайные инициативы
             time_since_last = time.time() - last_initiative_time
             min_interval = 3600  # 1 час
             
             if time_since_last > min_interval:
                 with user_settings_lock:
-                    # Выбираем только тех, кто разрешил инициативы
                     eligible_users = {uid: info for uid, info in user_settings.items() 
                                     if info.get("can_initiate", True) 
                                     and time.time() - info["last_active"] < 7 * 24 * 3600}
@@ -529,18 +522,18 @@ def background_life_cycle():
                         user_id = random.choice(list(eligible_users.keys()))
                         user_info = eligible_users[user_id]
                         
-                        print(f"💌 Богиня решила написать {user_info['name']}")
-                        message = generate_divine_message(user_id, user_info["name"])
+                        print(f"💌 Афина решила написать {user_info['name']}")
+                        message = generate_random_message(user_id, user_info["name"])
                         
                         try:
                             bot.send_message(user_id, message)
                             last_initiative_time = time.time()
-                            print(f"✅ Послание отправлено {user_info['name']}")
+                            print(f"✅ Сообщение отправлено {user_info['name']}")
                         except Exception as e:
                             print(f"❌ Не удалось отправить: {e}")
             
         except Exception as e:
-            print(f"❌ Ошибка: {e}")
+            print(f"❌ Ошибка в фоновом цикле: {e}")
             traceback.print_exc()
 
 threading.Thread(target=background_life_cycle, daemon=True).start()
@@ -549,12 +542,13 @@ threading.Thread(target=background_life_cycle, daemon=True).start()
 
 if __name__ == "__main__":
     print("="*60)
-    print("🏛️ Афина 5.0 - Богиня мудрости с инициативой!")
-    print(f"📚 Знаний в библиотеке: {len(kb.facts)}")
+    print("🌟 Афина 4.2 - Живая личность с инициативой!")
+    print(f"📚 Знаний в базе: {len(kb.facts)}")
     print(f"🎭 Настроение: {personality.mood}")
     with user_settings_lock:
-        print(f"👥 Смертных в контакте: {len(user_settings)}")
-    print("⚡ Суперспособности: всеведение, пророчества, планирование")
+        print(f"👥 Активных пользователей: {len(user_settings)}")
+    print("⏱️ Интервал инициативы: 1 час, шанс 25%")
+    print("📅 Планировщик напоминаний активен")
     print("="*60)
     
     retry_count = 0
