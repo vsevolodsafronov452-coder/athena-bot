@@ -16,6 +16,7 @@ import base64
 import fcntl
 import sys
 import signal
+import traceback
 from datetime import datetime
 from typing import List, Dict
 import telebot
@@ -81,10 +82,6 @@ except Exception as e:
     print(f"⚠️ Ошибка при сбросе вебхука: {e}")
 
 # ====== РАСПОЗНАВАНИЕ ГОЛОСА ЧЕРЕЗ SALUTESPEECH ======
-import base64
-import requests
-import uuid
-
 class SberRecognizer:
     """Распознавание голосовых сообщений через SaluteSpeech API"""
     
@@ -108,7 +105,9 @@ class SberRecognizer:
             }
             data = {"scope": self.scope}
             
+            print("🔑 Получаю токен авторизации...")
             response = requests.post(auth_url, headers=headers, data=data, timeout=10, verify=False)
+            
             if response.status_code == 200:
                 token_data = response.json()
                 self.auth_token = token_data["access_token"]
@@ -117,6 +116,7 @@ class SberRecognizer:
                 return self.auth_token
             else:
                 print(f"❌ Ошибка авторизации SaluteSpeech: {response.status_code}")
+                print(f"Ответ: {response.text}")
                 return None
         except Exception as e:
             print(f"❌ Ошибка получения токена: {e}")
@@ -124,59 +124,118 @@ class SberRecognizer:
     
     def transcribe(self, file_path: str) -> str:
         """Распознать аудиофайл"""
+        print(f"\n🎤 === НАЧАЛО РАСПОЗНАВАНИЯ ===")
+        
+        # Проверяем существование файла
+        if not os.path.exists(file_path):
+            print(f"❌ Файл не существует: {file_path}")
+            return ""
+        
+        # Проверяем размер файла
+        file_size = os.path.getsize(file_path)
+        print(f"📁 Размер файла: {file_size} байт")
+        
+        if file_size == 0:
+            print("❌ Файл пустой")
+            return ""
+        
+        # Читаем первые байты для проверки формата
+        try:
+            with open(file_path, "rb") as f:
+                header = f.read(8)
+                print(f"📋 Заголовок файла (первые 8 байт): {header.hex()}")
+        except Exception as e:
+            print(f"❌ Ошибка чтения файла: {e}")
+        
+        # Получаем токен
         token = self._get_auth_token()
         if not token:
+            print("❌ Нет токена авторизации")
             return ""
         
         try:
+            # Читаем аудио данные
+            with open(file_path, "rb") as f:
+                audio_data = f.read()
+            
+            print(f"📤 Отправляю запрос в SaluteSpeech (размер данных: {len(audio_data)} байт)...")
+            
             url = "https://smartspeech.sber.ru/v1/speech:recognize"
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "audio/ogg"
             }
-            
-            with open(file_path, "rb") as f:
-                audio_data = f.read()
-            
-            print(f"📤 Отправляю аудио ({len(audio_data)} байт) на распознавание...")
+            params = {
+                "language": "ru-RU",
+                "hypotheses_count": 1,
+                "enable_profanity_filter": False
+            }
             
             response = requests.post(
                 url,
                 headers=headers,
                 data=audio_data,
-                params={"language": "ru-RU"},
+                params=params,
                 timeout=30,
                 verify=False
             )
             
             print(f"📥 Статус ответа: {response.status_code}")
+            print(f"📥 Заголовки ответа: {dict(response.headers)}")
+            
+            # Пробуем получить текст ответа
+            response_text = response.text
+            print(f"📥 Тело ответа (первые 500 символов): {response_text[:500]}")
             
             if response.status_code == 200:
-                result = response.json()
-                if "result" in result and result["result"]:
-                    text = result["result"][0]["text"]
-                    print(f"✅ Распознано: {text}")
-                    return text
-                else:
-                    print("❌ Пустой ответ от API")
+                try:
+                    result = json.loads(response_text)
+                    print(f"📦 JSON ответ: {json.dumps(result, ensure_ascii=False, indent=2)[:1000]}")
+                    
+                    # Разные форматы ответа
+                    if "result" in result and result["result"]:
+                        if isinstance(result["result"], list):
+                            text = result["result"][0].get("text", "")
+                            if text:
+                                print(f"✅ Распознано: {text}")
+                                return text
+                    elif "text" in result:
+                        text = result["text"]
+                        print(f"✅ Распознано (старый формат): {text}")
+                        return text
+                    else:
+                        print("❌ Неизвестный формат ответа")
+                        return ""
+                except json.JSONDecodeError as e:
+                    print(f"❌ Ошибка парсинга JSON: {e}")
                     return ""
             else:
-                print(f"❌ Ошибка API: {response.status_code} - {response.text}")
+                print(f"❌ Ошибка API: {response.status_code}")
                 return ""
+                
         except Exception as e:
             print(f"❌ Ошибка при распознавании: {e}")
+            traceback.print_exc()
             return ""
-# =====================================================
 
 # Инициализация распознавания SaluteSpeech
 if SBER_SPEECH_KEY:
-    recognizer = SberRecognizer(SBER_SPEECH_KEY)
-    print("🎤 Голосовое распознавание через SaluteSpeech: ВКЛЮЧЕНО")
+    try:
+        recognizer = SberRecognizer(SBER_SPEECH_KEY)
+        print("🎤 Голосовое распознавание через SaluteSpeech: ВКЛЮЧЕНО")
+        # Пробуем получить токен сразу при старте
+        token = recognizer._get_auth_token()
+        if token:
+            print("✅ Токен успешно получен при инициализации")
+        else:
+            print("⚠️ Не удалось получить токен при инициализации")
+    except Exception as e:
+        recognizer = None
+        print(f"❌ Ошибка инициализации распознавания: {e}")
 else:
     recognizer = None
     print("⚠️ Голосовое распознавание отключено (нет SBER_SPEECH_KEY)")
-
-# ========== КЛАСС ЛИЧНОСТИ АФИНЫ ==========
+# =====================================================
 
 # ========== КЛАСС ЛИЧНОСТИ АФИНЫ ==========
 
@@ -407,8 +466,10 @@ def handle_voice(message):
         
         bot.edit_message_text("🔍 Распознаю речь...", chat_id=message.chat.id, message_id=status_msg.message_id)
         
+        # Распознаём речь
         text = recognizer.transcribe(temp_file)
         
+        # Удаляем временный файл
         try: 
             os.remove(temp_file)
         except: 
@@ -423,7 +484,8 @@ def handle_voice(message):
         process_text_message(message, text, user_name, status_msg.message_id)
         
     except Exception as e:
-        print(f"Ошибка обработки голоса: {e}")
+        print(f"❌ Ошибка обработки голоса: {e}")
+        traceback.print_exc()
         bot.edit_message_text(f"😅 Ошибка при обработке голоса: {e}", chat_id=message.chat.id, message_id=status_msg.message_id)
 
 def process_text_message(message, user_input, user_name, status_msg_id=None):
@@ -488,7 +550,8 @@ def background_life_cycle():
                 print(f"🤔 Афина решила поискать про {topic}")
                 searcher.search(topic)
         except Exception as e:
-            print(f"Ошибка в фоновом цикле: {e}")
+            print(f"❌ Ошибка в фоновом цикле: {e}")
+            traceback.print_exc()
 
 threading.Thread(target=background_life_cycle, daemon=True).start()
 
