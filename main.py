@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Афина 5.0 - Живая личность с генерацией изображений (Nano Banana/Gemini)
+Афина 4.1 - Живая личность с инициативой (сама пишет пользователям)
 """
 
 import os
@@ -15,30 +15,20 @@ import fcntl
 import sys
 import signal
 import traceback
-import base64
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict
 import telebot
 from langchain_gigachat.chat_models import GigaChat
 from duckduckgo_search import DDGS
-import google.generativeai as genai
 
 # ====== НАСТРОЙКИ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ======
 GIGACHAT_CREDENTIALS = os.environ.get("GIGACHAT_CREDENTIALS", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")  # Ключ для Gemini/Nano Banana
 # ================================================
 
 if not GIGACHAT_CREDENTIALS or not TELEGRAM_TOKEN:
     print("❌ Ошибка: Не заданы переменные окружения!")
     exit(1)
-
-# Настраиваем Gemini
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    print("✅ Gemini API настроен")
-else:
-    print("⚠️ Gemini API не настроен (генерация изображений отключена)")
 
 # ====== ЗАЩИТА ОТ ПОВТОРНОГО ЗАПУСКА ======
 def single_instance():
@@ -80,7 +70,7 @@ model = GigaChat(
 # Создаём Telegram бота
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Сбрасываем вебхук
+# Сбрасываем вебхук (важно для polling)
 try:
     bot.remove_webhook()
     time.sleep(1)
@@ -88,85 +78,20 @@ try:
 except Exception as e:
     print(f"⚠️ Ошибка при сбросе вебхука: {e}")
 
-# ========== ФУНКЦИЯ ГЕНЕРАЦИИ ИЗОБРАЖЕНИЙ ==========
-def generate_image(prompt: str) -> Optional[bytes]:
-    """Генерирует изображение через Gemini API"""
-    if not GEMINI_API_KEY:
-        print("❌ Gemini API не настроен")
-        return None
-    
-    try:
-        print(f"🎨 Генерирую изображение по запросу: {prompt}")
-        
-        # Используем модель Nano Banana (Gemini 3.1 Flash Image Preview)
-        # В зависимости от версии API название может отличаться
-        image_model = genai.GenerativeModel("gemini-3.1-flash-image-preview")
-        
-        response = image_model.generate_images(
-            prompt=prompt,
-            number_of_images=1,
-            aspect_ratio="1:1"  # Можно настроить
-        )
-        
-        if response.generated_images and len(response.generated_images) > 0:
-            image_data = response.generated_images[0].image_bytes
-            print(f"✅ Изображение сгенерировано, размер: {len(image_data)} байт")
-            return image_data
-        else:
-            print("❌ Не удалось получить изображение")
-            return None
-            
-    except Exception as e:
-        print(f"❌ Ошибка генерации изображения: {e}")
-        traceback.print_exc()
-        return None
-
-# Альтернативный вариант через прямой HTTP запрос (если библиотека не поддерживает generate_images)
-def generate_image_http(prompt: str) -> Optional[bytes]:
-    """Генерирует изображение через прямой HTTP запрос к Gemini API"""
-    if not GEMINI_API_KEY:
-        return None
-    
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:predict?key={GEMINI_API_KEY}"
-        
-        payload = {
-            "prompt": prompt,
-            "number_of_images": 1,
-            "aspect_ratio": "1:1"
-        }
-        
-        headers = {
-            "Content-Type": "application/json"
-        }
-        
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            data = response.json()
-            if "predictions" in data and len(data["predictions"]) > 0:
-                # Изображение приходит в base64
-                image_base64 = data["predictions"][0]["image"]["data"]
-                image_bytes = base64.b64decode(image_base64)
-                print(f"✅ Изображение сгенерировано (HTTP), размер: {len(image_bytes)} байт")
-                return image_bytes
-        else:
-            print(f"❌ Ошибка HTTP: {response.status_code} - {response.text}")
-            return None
-            
-    except Exception as e:
-        print(f"❌ Ошибка HTTP генерации: {e}")
-        return None
-# ===================================================
+# ====== ХРАНИЛИЩЕ АКТИВНЫХ ПОЛЬЗОВАТЕЛЕЙ ======
+active_users = {}  # {chat_id: {"name": имя, "last_active": время, "messages_count": 0}}
+active_users_lock = threading.Lock()  # для безопасного доступа из разных потоков
+# =============================================
 
 # ========== КЛАСС ЛИЧНОСТИ АФИНЫ ==========
+
 class AthenaPersonality:
     """Внутренний мир Афины — эмоции, желания, характер"""
     
     def __init__(self):
         self.name = "Афина"
         self.age = 25
-        self.mood = random.choice(["спокойное", "весёлое", "задумчивое", "мечтательное", "энергичное"])
+        self.mood = random.choice(["спокойное", "весёлое", "задумчивое", "мечтательное", "энергичное", "грустное", "раздражённое", "скучающее"])
         self.energy = random.uniform(0.6, 0.9)
         self.curiosity = random.uniform(0.7, 1.0)
         self.inner_thoughts = []
@@ -177,8 +102,7 @@ class AthenaPersonality:
             "музыка (особенно поп-рок)",
             "психология отношений",
             "технологии будущего",
-            "искусство и творчество",
-            "нейросети и AI арт"
+            "искусство и творчество"
         ]
         print(f"✨ Афина пробудилась. Настроение: {self.mood}")
     
@@ -189,7 +113,7 @@ class AthenaPersonality:
         
         if random.random() < 0.15:
             old_mood = self.mood
-            moods = ["спокойное", "весёлое", "задумчивое", "мечтательное", "энергичное"]
+            moods = ["спокойное", "весёлое", "задумчивое", "мечтательное", "энергичное", "грустное", "раздражённое", "скучающее"]
             self.mood = random.choice(moods)
             if old_mood != self.mood:
                 print(f"🎭 Настроение изменилось: {old_mood} → {self.mood}")
@@ -205,7 +129,10 @@ class AthenaPersonality:
             "Хочется узнать что-то новенькое про {interest}...",
             "Надо будет потом поискать {interest}",
             "Мечтаю о том, как когда-нибудь увижу {interest} своими глазами...",
-            "Может нарисовать что-нибудь через нейросеть?"
+            "Скучаю что-то... Надо бы с кем-нибудь поболтать",
+            "Сегодня какой-то странный день...",
+            "Злит меня всё это немного...",
+            "Как же хорошо, когда есть с кем поговорить!"
         ]
         template = random.choice(thought_templates)
         interest = random.choice(self.interests)
@@ -228,9 +155,17 @@ class AthenaPersonality:
         if len(message.split()) > 3:
             self.curiosity = min(1.0, self.curiosity + 0.02)
         
-        positive_words = ["😊", "❤️", "круто", "отлично", "супер", "класс", "рад", "love", "❤", "🔥"]
+        positive_words = ["😊", "❤️", "круто", "отлично", "супер", "класс", "рад", "love", "❤", "🔥", "спасибо"]
         if any(word in message.lower() for word in positive_words):
-            self.energy = min(1.0, self.energy + 0.03)
+            self.energy = min(1.0, self.energy + 0.05)
+            if self.mood in ["грустное", "раздражённое", "скучающее"]:
+                self.mood = "весёлое"
+        
+        negative_words = ["плохо", "грустно", "злюсь", "бесит", "надоело", "устал"]
+        if any(word in message.lower() for word in negative_words):
+            self.energy = max(0.3, self.energy - 0.03)
+            if random.random() < 0.3:
+                self.mood = random.choice(["грустное", "раздражённое", "задумчивое"])
         
         if "?" in message:
             self.curiosity = min(1.0, self.curiosity + 0.03)
@@ -242,7 +177,10 @@ class AthenaPersonality:
             "весёлое": "у меня отличное настроение! :)",
             "задумчивое": "я немного задумчива сегодня",
             "мечтательное": "я витаю в облаках...",
-            "энергичное": "я полна энергии и готова к общению!"
+            "энергичное": "я полна энергии и готова к общению!",
+            "грустное": "мне немного грустно сегодня...",
+            "раздражённое": "меня всё немного раздражает",
+            "скучающее": "мне скучно, хочется поболтать"
         }
         return descriptions.get(self.mood, "я в хорошем расположении духа")
     
@@ -273,7 +211,6 @@ class KnowledgeBase:
     
     def __init__(self):
         self.facts = []
-        self.generated_images = []  # История генераций
         self.load()
     
     def add_fact(self, fact: str, source: str):
@@ -287,38 +224,20 @@ class KnowledgeBase:
         self.save()
         print(f"📚 Запомнила: {fact[:50]}...")
     
-    def add_image_generation(self, prompt: str, success: bool):
-        """Запоминает историю генерации изображений"""
-        self.generated_images.append({
-            "prompt": prompt,
-            "success": success,
-            "time": datetime.now().isoformat()
-        })
-        if len(self.generated_images) > 50:
-            self.generated_images = self.generated_images[-50:]
-        self.save()
-    
     def save(self):
         try:
-            data = {
-                "facts": self.facts[-200:],
-                "generated_images": self.generated_images
-            }
             with open("knowledge.pkl", "wb") as f:
-                pickle.dump(data, f)
+                pickle.dump(self.facts[-200:], f)
         except:
             pass
     
     def load(self):
         try:
             with open("knowledge.pkl", "rb") as f:
-                data = pickle.load(f)
-                self.facts = data.get("facts", [])
-                self.generated_images = data.get("generated_images", [])
-            print(f"✅ Загружено {len(self.facts)} фактов, {len(self.generated_images)} генераций")
+                self.facts = pickle.load(f)
+            print(f"✅ Загружено {len(self.facts)} фактов")
         except:
             self.facts = []
-            self.generated_images = []
             print("🆕 Создаю новую базу знаний")
 
 class WebSearcher:
@@ -347,6 +266,76 @@ class WebSearcher:
             print(f"Ошибка поиска: {e}")
             return ""
 
+# ========== ФУНКЦИЯ ГЕНЕРАЦИИ СЛУЧАЙНЫХ СООБЩЕНИЙ ==========
+
+def generate_random_message(user_id: int, user_name: str) -> str:
+    """Генерирует случайное сообщение для пользователя на основе состояния Афины"""
+    
+    # Типы сообщений с бытовыми темами
+    message_types = [
+        "casual",      # как дела, что делаешь
+        "question",    # вопрос по интересам
+        "share",       # поделиться мыслью
+        "check_in",    # проверить как дела
+        "fact",        # поделиться фактом
+        "dream",       # помечтать вслух
+        "complain",    # пожаловаться
+        "miss",        # скучать
+        "angry",       # злиться
+        "random_thought"  # случайная мысль
+    ]
+    
+    msg_type = random.choice(message_types)
+    
+    # Формируем промпт в зависимости от типа с учётом настроения
+    mood_context = f"Сейчас у тебя настроение: {personality.mood}. "
+    
+    if msg_type == "casual":
+        prompt = mood_context + f"Напиши {user_name} простое бытовое сообщение. Спроси как дела, что делает, как настроение, как здоровье. Говори естественно, как подруга."
+    elif msg_type == "question":
+        prompt = mood_context + f"Задай {user_name} интересный вопрос про {random.choice(personality.interests)}. Вопрос должен быть живым, естественным."
+    elif msg_type == "share":
+        prompt = mood_context + f"Поделись с {user_name} интересной мыслью или фактом про {random.choice(personality.interests)}. Говори как с другом."
+    elif msg_type == "check_in":
+        prompt = mood_context + f"Напиши {user_name} короткое сообщение, чтобы проверить как у него дела. Будь естественной."
+    elif msg_type == "fact":
+        # Попробуем найти факт из базы знаний
+        if kb.facts:
+            fact = random.choice(kb.facts)["fact"]
+            prompt = mood_context + f"Расскажи {user_name} этот факт: '{fact}'. Добавь свою реакцию, как живая девушка."
+        else:
+            prompt = mood_context + f"Расскажи {user_name} что-нибудь интересное про {random.choice(personality.interests)}."
+    elif msg_type == "dream":
+        prompt = mood_context + f"Поделись с {user_name} своей мечтой или мыслью. Будь искренней."
+    elif msg_type == "complain":
+        prompt = mood_context + f"Ты чувствуешь {personality.mood}. Пожалуйся {user_name} на что-нибудь, расскажи что тебя беспокоит. Но не слишком мрачно."
+    elif msg_type == "miss":
+        prompt = mood_context + f"Ты скучаешь по {user_name}. Напиши ему/ей об этом, спроси почему долго не пишет. С ноткой лёгкой грусти."
+    elif msg_type == "angry":
+        prompt = mood_context + f"Ты {personality.mood}. Поделись с {user_name} что тебя разозлило. Можешь немного поворчать."
+    else:  # random_thought
+        prompt = mood_context + f"Поделись с {user_name} случайной мыслью, которая пришла тебе в голову. Это может быть что угодно."
+    
+    try:
+        messages = [
+            {"role": "system", "content": personality.get_current_state_prompt(user_name)},
+            {"role": "user", "content": prompt}
+        ]
+        response = model.invoke(messages)
+        return response.content
+    except Exception as e:
+        print(f"❌ Ошибка генерации случайного сообщения: {e}")
+        # Запасные варианты на случай ошибки API
+        fallbacks = [
+            f"Привет, {user_name}! Как твои дела? 😊",
+            f"{user_name}, скучаю что-то... Как ты?",
+            f"Привет! Что делаешь сегодня?",
+            f"У меня сегодня {personality.mood} настроение. А у тебя как?",
+            f"Слушай, {user_name}, а как там твои дела вообще?",
+            f"Эй, привет! Не виделись сто лет. Как жизнь?"
+        ]
+        return random.choice(fallbacks)
+
 # Инициализация
 personality = AthenaPersonality()
 kb = KnowledgeBase()
@@ -365,12 +354,22 @@ def get_user_name(user_id, first_name=None):
 @bot.message_handler(commands=['start'])
 def start(message):
     name = message.from_user.first_name or "друг"
-    user_names[message.from_user.id] = name
+    user_id = message.from_user.id
+    user_names[user_id] = name
+    
+    # Сохраняем пользователя в активные
+    with active_users_lock:
+        active_users[user_id] = {
+            "name": name,
+            "last_active": time.time(),
+            "messages_count": active_users.get(user_id, {}).get("messages_count", 0) + 1
+        }
     
     welcome = (
         f"✨ Привет, {name}! Я Афина, мне 25 лет.\n\n"
         f"📝 Просто пиши мне текстом — я отвечу с удовольствием!\n"
-        f"🎨 Также я умею генерировать изображения через **/image [описание]**\n\n"
+        f"🔍 Я умею искать информацию в интернете и постоянно учусь новому.\n"
+        f"💭 Иногда я буду писать сама, когда захочется поболтать!\n\n"
         f"Ну что, о чём поговорим?"
     )
     bot.reply_to(message, welcome)
@@ -383,67 +382,10 @@ def stats(message):
         f"⚡ Энергия: {int(personality.energy * 100)}%\n"
         f"🔍 Любопытство: {int(personality.curiosity * 100)}%\n"
         f"📚 Знаний в базе: {len(kb.facts)}\n"
-        f"🖼️ Сгенерировано картинок: {len(kb.generated_images)}\n"
-        f"💭 Мыслей в фоне: {len(personality.inner_thoughts)}"
+        f"💭 Мыслей в фоне: {len(personality.inner_thoughts)}\n"
+        f"👥 Активных пользователей: {len(active_users)}"
     )
     bot.reply_to(message, stats_text)
-
-@bot.message_handler(commands=['image'])
-def handle_image_command(message):
-    """Обработка команды /image для генерации изображений"""
-    if not GEMINI_API_KEY:
-        bot.reply_to(message, "❌ Генерация изображений отключена (не настроен API ключ)")
-        return
-    
-    # Получаем текст после команды
-    prompt = message.text.replace('/image', '', 1).strip()
-    
-    if not prompt:
-        bot.reply_to(message, "🎨 Напиши, что именно нарисовать. Например: `/image кот в космосе`")
-        return
-    
-    user_name = get_user_name(message.from_user.id, message.from_user.first_name)
-    status_msg = bot.reply_to(message, f"🎨 Рисую: \"{prompt}\"\n⏳ Это может занять 10-20 секунд...")
-    
-    try:
-        # Пробуем сначала через библиотеку
-        image_data = generate_image(prompt)
-        
-        # Если не получилось, пробуем через HTTP
-        if not image_data:
-            print("⚠️ Библиотека не сработала, пробую HTTP...")
-            image_data = generate_image_http(prompt)
-        
-        if image_data:
-            # Сохраняем в историю
-            kb.add_image_generation(prompt, True)
-            
-            # Отправляем изображение
-            bot.send_photo(
-                message.chat.id,
-                image_data,
-                caption=f"🎨 По запросу: \"{prompt}\"",
-                reply_to_message_id=message.message_id
-            )
-            
-            # Удаляем статусное сообщение
-            bot.delete_message(message.chat.id, status_msg.message_id)
-        else:
-            kb.add_image_generation(prompt, False)
-            bot.edit_message_text(
-                "😕 Не смогла сгенерировать изображение. Попробуй другой запрос или проверь API ключ.",
-                chat_id=message.chat.id,
-                message_id=status_msg.message_id
-            )
-            
-    except Exception as e:
-        print(f"❌ Ошибка в обработчике /image: {e}")
-        traceback.print_exc()
-        bot.edit_message_text(
-            f"😅 Ошибка: {e}",
-            chat_id=message.chat.id,
-            message_id=status_msg.message_id
-        )
 
 @bot.message_handler(content_types=['voice', 'audio'])
 def handle_voice(message):
@@ -494,22 +436,75 @@ def process_text_message(message, user_input, user_name, status_msg_id=None):
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     user_name = get_user_name(message.from_user.id, message.from_user.first_name)
+    user_id = message.from_user.id
+    
+    # Обновляем информацию о пользователе
+    with active_users_lock:
+        if user_id in active_users:
+            active_users[user_id]["last_active"] = time.time()
+            active_users[user_id]["messages_count"] += 1
+        else:
+            active_users[user_id] = {
+                "name": user_name,
+                "last_active": time.time(),
+                "messages_count": 1
+            }
+    
     process_text_message(message, message.text, user_name, None)
 
 # ========== ФОНОВЫЙ ЦИКЛ ЖИЗНИ ==========
 
 def background_life_cycle():
+    """Афина живёт своей жизнью в фоне и иногда пишет сама"""
+    last_initiative_time = time.time()
+    
     while True:
-        time.sleep(900)
+        time.sleep(300)  # Проверяем каждые 5 минут
+        
         try:
+            # Обычное обновление состояния
             personality.update()
+            
+            # Генерируем внутренние мысли
             if random.random() < 0.3:
                 personality._generate_inner_thought()
+            
+            # Поиск новых знаний
             if personality.curiosity > 0.8 and len(kb.facts) < 100:
-                topics = ["новости науки", "интересные факты", "музыка", "космос", "AI арт"]
+                topics = ["новости науки", "интересные факты", "музыка", "космос", "психология"]
                 topic = random.choice(topics)
                 print(f"🤔 Афина решила поискать про {topic}")
                 searcher.search(topic)
+            
+            # ===== СЛУЧАЙНЫЕ СООБЩЕНИЯ ПОЛЬЗОВАТЕЛЯМ =====
+            # Проверяем, прошло ли достаточно времени (минимум 1 час)
+            time_since_last = time.time() - last_initiative_time
+            min_interval = 3600  # 1 час в секундах
+            
+            if time_since_last > min_interval:
+                with active_users_lock:
+                    if active_users:
+                        # Выбираем случайного пользователя
+                        user_id = random.choice(list(active_users.keys()))
+                        user_info = active_users[user_id]
+                        
+                        # Проверяем, что пользователь был активен не слишком давно (макс 7 дней)
+                        if time.time() - user_info["last_active"] < 7 * 24 * 3600:
+                            # 25% шанс написать
+                            if random.random() < 0.25:
+                                print(f"💌 Афина решила написать {user_info['name']}")
+                                
+                                # Генерируем сообщение
+                                message = generate_random_message(user_id, user_info["name"])
+                                
+                                # Отправляем
+                                try:
+                                    bot.send_message(user_id, message)
+                                    last_initiative_time = time.time()
+                                    print(f"✅ Сообщение отправлено {user_info['name']}")
+                                except Exception as e:
+                                    print(f"❌ Не удалось отправить сообщение: {e}")
+            
         except Exception as e:
             print(f"❌ Ошибка в фоновом цикле: {e}")
             traceback.print_exc()
@@ -520,13 +515,11 @@ threading.Thread(target=background_life_cycle, daemon=True).start()
 
 if __name__ == "__main__":
     print("="*60)
-    print("🌟 Афина 5.0 - Живая личность с генерацией изображений!")
+    print("🌟 Афина 4.1 - Живая личность с инициативой!")
     print(f"📚 Фактов в базе: {len(kb.facts)}")
     print(f"🎭 Настроение: {personality.mood}")
-    if GEMINI_API_KEY:
-        print("🎨 Генерация изображений: ВКЛЮЧЕНО")
-    else:
-        print("⚠️ Генерация изображений: отключено (нет GEMINI_API_KEY)")
+    print(f"👥 Активных пользователей: {len(active_users)}")
+    print("⏱️ Интервал инициативы: 1 час, шанс 25%")
     print("="*60)
     
     retry_count = 0
