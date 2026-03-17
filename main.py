@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Афина — простая живая девчонка, 25 лет
-Болтает, ищет в интернете, напоминает, иногда пишет сама
+Афина — простая девчонка, 25 лет
+Только отвечает на сообщения, сама не пишет
 """
 
 import os
@@ -76,12 +76,7 @@ try:
 except Exception as e:
     print(f"⚠️ Ошибка: {e}")
 
-# ====== ПОЛЬЗОВАТЕЛИ ======
-user_settings = {}  # {chat_id: {"name": имя, "can_initiate": True/False, "last_active": время}}
-user_settings_lock = threading.Lock()
-# =========================
-
-# ====== ПЛАНИРОВЩИК ======
+# ====== ПЛАНИРОВЩИК НАПОМИНАНИЙ ======
 scheduled_messages = []  # (timestamp, chat_id, message)
 scheduled_lock = threading.Lock()
 
@@ -222,30 +217,6 @@ class WebSearcher:
             return ""
 # ====================================
 
-# ========== ГЕНЕРАЦИЯ СООБЩЕНИЙ ==========
-def generate_message_for(user_id, user_name):
-    types = ["casual", "question", "share", "check_in", "miss"]
-    t = random.choice(types)
-    
-    prompts = {
-        "casual": f"Напиши {user_name} простое сообщение. Спроси как дела, что делает.",
-        "question": f"Задай {user_name} интересный вопрос.",
-        "share": f"Поделись с {user_name} чем-то, что тебя волнует.",
-        "check_in": f"Напиши {user_name} коротко, проверить как у него дела.",
-        "miss": f"Ты скучаешь по {user_name}. Напиши об этом."
-    }
-    
-    try:
-        messages = [
-            {"role": "system", "content": personality.get_prompt(user_name)},
-            {"role": "user", "content": prompts[t]}
-        ]
-        response = model.invoke(messages)
-        return response.content
-    except:
-        return f"Привет, {user_name}! Как твои дела?"
-# ======================================
-
 # Инициализация
 personality = AthenaPersonality()
 kb = KnowledgeBase()
@@ -255,56 +226,29 @@ searcher = WebSearcher(kb)
 @bot.message_handler(commands=['start'])
 def start(message):
     name = message.from_user.first_name or "друг"
-    uid = message.from_user.id
-    with user_settings_lock:
-        user_settings[uid] = {
-            "name": name,
-            "can_initiate": True,
-            "last_active": time.time()
-        }
     bot.reply_to(message, 
         f"✨ Привет, {name}! Я Афина, 25 лет.\n\n"
-        "📝 Просто болтай со мной\n"
-        "🔍 «не пиши мне» — отключить мои сообщения\n"
-        "🔍 «можешь писать» — включить обратно\n"
-        "⏰ «напомни через X минут ...»\n\n"
+        "📝 Просто болтай со мной — я отвечу\n"
+        "⏰ «напомни через X минут ...» — запланировать напоминание\n\n"
         "Ну что, о чём поговорим?")
 
 @bot.message_handler(commands=['stats'])
 def stats(message):
-    uid = message.from_user.id
-    with user_settings_lock:
-        can = user_settings.get(uid, {}).get("can_initiate", True)
     bot.reply_to(message,
         f"📊 Моё состояние:\n"
         f"🎭 Настроение: {personality.mood}\n"
         f"⚡ Энергия: {int(personality.energy*100)}%\n"
-        f"📚 Фактов: {len(kb.facts)}\n"
-        f"💭 Мыслей: {len(personality.inner_thoughts)}\n"
-        f"🤖 Писать первой: {'да' if can else 'нет'}")
+        f"📚 Фактов в базе: {len(kb.facts)}\n"
+        f"💭 Мыслей в фоне: {len(personality.inner_thoughts)}")
 
 @bot.message_handler(content_types=['voice', 'audio'])
 def voice(message):
     bot.reply_to(message, "🎤 Голос пока не понимаю, напиши текстом :)")
 
 def handle_message_text(message, user_input, user_name, status_msg_id=None):
-    uid = message.from_user.id
     lower = user_input.lower()
     
-    if lower in ["не пиши мне", "не пиши мне первой"]:
-        with user_settings_lock:
-            if uid in user_settings:
-                user_settings[uid]["can_initiate"] = False
-        bot.reply_to(message, "😊 Ок, не буду писать первой")
-        return
-    
-    if lower in ["можешь писать", "можешь писать первой"]:
-        with user_settings_lock:
-            if uid in user_settings:
-                user_settings[uid]["can_initiate"] = True
-        bot.reply_to(message, "✨ Ок, буду писать, когда захочется")
-        return
-    
+    # Проверка на напоминание
     if lower.startswith("напомни через") or lower.startswith("напиши через"):
         try:
             parts = user_input.split()
@@ -312,12 +256,13 @@ def handle_message_text(message, user_input, user_name, status_msg_id=None):
                 if p.isdigit():
                     mins = int(p)
                     txt = ' '.join(parts[i+2:])
-                    add_scheduled_message(uid, txt, mins*60)
+                    add_scheduled_message(message.chat.id, txt, mins*60)
                     bot.reply_to(message, f"✅ Напомню через {mins} мин: «{txt}»")
                     return
         except:
             pass
     
+    # Обычный ответ
     try:
         personality.react_to_message(user_input)
         personality.update()
@@ -351,46 +296,21 @@ def handle_message_text(message, user_input, user_name, status_msg_id=None):
 @bot.message_handler(func=lambda m: True)
 def handle_all(message):
     name = message.from_user.first_name or "друг"
-    uid = message.from_user.id
-    with user_settings_lock:
-        if uid in user_settings:
-            user_settings[uid]["last_active"] = time.time()
-            user_settings[uid]["name"] = name
-        else:
-            user_settings[uid] = {"name": name, "can_initiate": True, "last_active": time.time()}
     handle_message_text(message, message.text, name, None)
 
-# ========== ФОН ==========
+# ========== ФОН (ТОЛЬКО ОБУЧЕНИЕ, БЕЗ ИНИЦИАТИВ) ==========
 def background_loop():
-    last_init = time.time()
     while True:
-        time.sleep(300)
+        time.sleep(900)  # 15 минут
         try:
             personality.update()
             if random.random()<0.3:
                 personality._generate_thought()
             
-            # Поиск знаний
+            # Поиск знаний для самообучения
             if personality.curiosity>0.8 and len(kb.facts)<100:
                 topic = random.choice(["новости", "интересные факты", "музыка", "космос"])
                 searcher.search(topic)
-            
-            # Случайные инициативы
-            if time.time()-last_init > 3600:  # 1 час
-                with user_settings_lock:
-                    eligible = {uid:inf for uid,inf in user_settings.items() 
-                              if inf.get("can_initiate",True) 
-                              and time.time()-inf["last_active"] < 7*24*3600}
-                if eligible and random.random()<0.25:  # 25%
-                    uid = random.choice(list(eligible.keys()))
-                    name = eligible[uid]["name"]
-                    msg = generate_message_for(uid, name)
-                    try:
-                        bot.send_message(uid, msg)
-                        last_init = time.time()
-                        print(f"💌 Написала {name}")
-                    except:
-                        pass
         except:
             traceback.print_exc()
 
@@ -402,8 +322,8 @@ if __name__ == "__main__":
     print("🌟 Афина — простая девчонка 25 лет")
     print(f"📚 Знаний: {len(kb.facts)}")
     print(f"🎭 Настроение: {personality.mood}")
-    print("⏱️ Пишет сама: раз в час с шансом 25%")
     print("📅 Напоминания работают")
+    print("🤫 Сама не пишет — только отвечает")
     print("="*50)
     
     retry = 0
